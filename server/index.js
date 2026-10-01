@@ -33,9 +33,9 @@ const allowedOrigins = [...new Set([
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json({ limit: "16kb" }));
 app.use("/api/auth", authRoutes);
+app.use("/", mediaRoutes);
 app.use("/api", chatRoutes);
 app.use("/api", profileRoutes);
-app.use("/api", mediaRoutes);
 app.get("/", (_req, res) => res.send("alphaChat API is running."));
 app.use((_req, res) => res.status(404).json({ message: "Not found." }));
 app.use((error, _req, res, _next) => {

@@ -3,6 +3,8 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useAuth } from "../hooks/useAuth";
 import { useSocket } from "../hooks/useSocket";
 import api from "../services/api";
+import Avatar from "../components/Avatar";
+import ProfilePanel from "../components/ProfilePanel";
 
 const idOf = (value) => value?.id || value?._id || value;
 const timeLabel = (date) => new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(date));
@@ -14,20 +16,14 @@ function Icon({ name, size = 18 }) {
   };
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 }
-function Avatar({ user, size = "normal" }) {
-  return <div className={`avatar avatar-${size}`}>
-    {user?.profilePicture ? <img src={user.profilePicture} alt="" /> : <span>{(user?.name || "?").trim().slice(0, 1).toUpperCase()}</span>}
-    {user?.isOnline && <i className="online-indicator" />}
-  </div>;
-}
-const MessageRow = memo(function MessageRow({ message, own, peer }) {
+const MessageRow = memo(function MessageRow({ message, own, peer, onEdit, onDelete }) {
   return <motion.div className={`message-row ${own ? "is-own" : ""}`} initial={{ opacity: 0, y: 7, scale: 0.99 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: 0.17, ease: [0.22, 1, 0.36, 1] }}>
     {!own && <Avatar user={peer} size="tiny" />}
-    <div className="message-content"><div className={`message-bubble ${own ? "own-bubble" : ""}`}>{message.content}</div><div className="message-meta"><time>{timeLabel(message.createdAt)}</time>{message.pending && <span className="sending-label">Sending</span>}{own && !message.pending && <span className="message-check"><Icon name="check" size={12} /></span>}</div></div>
+    <div className="message-content"><div className={`message-bubble ${own ? "own-bubble" : ""} ${message.isDeleted ? "deleted-bubble" : ""}`}>{message.content}</div><div className="message-meta"><time>{timeLabel(message.createdAt)}</time>{message.editedAt && !message.isDeleted && <span>Edited</span>}{message.pending && <span className="sending-label">Sending</span>}{own && !message.pending && <span className="message-check"><Icon name="check" size={12} /></span>}{own && !message.pending && !message.isDeleted && <span className="message-actions"><button type="button" aria-label="Edit message" title="Edit message" onClick={() => onEdit(message)}>Edit</button><button type="button" aria-label="Delete message" title="Delete message" onClick={() => onDelete(message)}>Delete</button></span>}</div></div>
   </motion.div>;
 });
 export default function Chat() {
-  const { user, logout } = useAuth();
+  const { user, logout, updateUser } = useAuth();
   const token = localStorage.getItem("alphaChat.token");
   const socket = useSocket(token);
   const [conversations, setConversations] = useState([]);
@@ -37,6 +33,8 @@ export default function Chat() {
   const [results, setResults] = useState([]);
   const [resultsFor, setResultsFor] = useState("");
   const [draft, setDraft] = useState("");
+  const [editing, setEditing] = useState(null);
+  const [profileTarget, setProfileTarget] = useState(null);
   const [typing, setTyping] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -133,20 +131,34 @@ export default function Chat() {
       if (nearBottomRef.current) requestAnimationFrame(() => revealLatest(listRef.current));
       else if (idOf(message.sender) !== idOf(user)) setNewCount((count) => count + 1);
     };
+    const onMessageChange = (message) => {
+      setMessages((items) => items.map((item) => idOf(item) === idOf(message) ? message : item));
+      setConversations((items) => items.map((item) => idOf(item) === idOf(message.conversation) && idOf(item.lastMessage) === idOf(message) ? { ...item, lastMessage: message } : item));
+    };
+    const onProfileUpdate = (profile) => {
+      const profileId = idOf(profile);
+      const apply = (person) => idOf(person) === profileId ? { ...person, ...profile, _id: profileId } : person;
+      setConversations((items) => items.map((item) => ({ ...item, participants: item.participants.map(apply) })));
+      setSelected((current) => current ? { ...current, participants: current.participants.map(apply) } : current);
+      setProfileTarget((current) => current && idOf(current) === profileId ? { ...current, ...profile, _id: profileId } : current);
+      if (profileId === idOf(user)) updateUser(profile);
+    };
     const presence = (online) => ({ userId, lastSeen }) => {
       const update = (person) => idOf(person) === userId ? { ...person, isOnline: online, ...(lastSeen ? { lastSeen } : {}) } : person;
       setConversations((items) => items.map((item) => ({ ...item, participants: item.participants.map(update) })));
       setSelected((current) => current ? { ...current, participants: current.participants.map(update) } : current);
+      setProfileTarget((current) => current && idOf(current) === userId ? { ...current, isOnline: online, ...(lastSeen ? { lastSeen } : {}) } : current);
     };
     const onUserOnline = presence(true); const onUserOffline = presence(false);
     const onTypingStart = ({ conversationId }) => { if (idOf(selectedRef.current) === conversationId) setTyping(true); };
     const onTypingStop = ({ conversationId }) => { if (idOf(selectedRef.current) === conversationId) setTyping(false); };
     socket.on("connect", onConnect); socket.on("disconnect", onDisconnect); socket.on("connect_error", onConnectError); socket.on("receive_message", onMessage);
     socket.on("user_online", onUserOnline); socket.on("user_offline", onUserOffline);
+    socket.on("message_updated", onMessageChange); socket.on("message_deleted", onMessageChange); socket.on("user_profile_updated", onProfileUpdate);
     socket.on("typing_start", onTypingStart); socket.on("typing_stop", onTypingStop);
     queueMicrotask(socket.connected ? onConnect : onDisconnect);
-    return () => { socket.off("connect", onConnect); socket.off("disconnect", onDisconnect); socket.off("connect_error", onConnectError); socket.off("receive_message", onMessage); socket.off("user_online", onUserOnline); socket.off("user_offline", onUserOffline); socket.off("typing_start", onTypingStart); socket.off("typing_stop", onTypingStop); };
-  }, [socket, user, fetchConversations]);
+    return () => { socket.off("connect", onConnect); socket.off("disconnect", onDisconnect); socket.off("connect_error", onConnectError); socket.off("receive_message", onMessage); socket.off("user_online", onUserOnline); socket.off("user_offline", onUserOffline); socket.off("message_updated", onMessageChange); socket.off("message_deleted", onMessageChange); socket.off("user_profile_updated", onProfileUpdate); socket.off("typing_start", onTypingStart); socket.off("typing_stop", onTypingStop); };
+  }, [socket, user, fetchConversations, updateUser]);
 
   const loadOlder = async () => {
     if (!selected || !hasMore || loadingMessages) return;
@@ -169,6 +181,15 @@ export default function Chat() {
       setError("Chat connection is unavailable. Please wait for it to reconnect.");
       return;
     }
+    if (editing) {
+      socket.timeout(10000).emit("edit_message", { messageId: idOf(editing), content }, (timeoutError, response) => {
+        if (timeoutError || response?.error || !response?.message) { setError(response?.error || "Message could not be edited. Please try again."); return; }
+        setMessages((items) => items.map((item) => idOf(item) === idOf(response.message) ? response.message : item));
+        setConversations((items) => items.map((item) => idOf(item) === idOf(selected) && idOf(item.lastMessage) === idOf(response.message) ? { ...item, lastMessage: response.message } : item));
+        setEditing(null); setDraft(""); setError("");
+      });
+      return;
+    }
     const clientId = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     const optimistic = { _id: `temp-${clientId}`, clientId, conversation: idOf(selected), sender: idOf(user), receiver: idOf(activePeer), content, createdAt: new Date().toISOString(), pending: true };
     const shouldScroll = nearBottomRef.current;
@@ -180,6 +201,18 @@ export default function Chat() {
       const saved = response.message;
       setMessages((items) => items.map((item) => item.clientId === clientId ? { ...saved, clientId, pending: false } : item));
       setConversations((items) => items.map((item) => idOf(item) === idOf(selected) ? { ...item, lastMessage: saved, lastMessageAt: saved.createdAt } : item));
+    });
+  };
+
+  const beginEdit = (message) => { setEditing(message); setDraft(message.content); setError(""); requestAnimationFrame(() => draftRef.current?.focus()); };
+  const cancelEdit = () => { setEditing(null); setDraft(""); setError(""); };
+  const deleteMessage = (message) => {
+    if (!window.confirm("Delete this message for everyone?")) return;
+    if (!socket?.connected) { setError("Chat connection is unavailable. Please wait for it to reconnect."); return; }
+    socket.timeout(10000).emit("delete_message", { messageId: idOf(message) }, (timeoutError, response) => {
+      if (timeoutError || response?.error || !response?.message) { setError(response?.error || "Message could not be deleted. Please try again."); return; }
+      setMessages((items) => items.map((item) => idOf(item) === idOf(response.message) ? response.message : item));
+      setConversations((items) => items.map((item) => idOf(item) === idOf(selected) && idOf(item.lastMessage) === idOf(response.message) ? { ...item, lastMessage: response.message } : item));
     });
   };
 
@@ -200,7 +233,7 @@ export default function Chat() {
 
   return <main className={`chat-shell ${selected ? "is-chat-open" : ""}`}>
     <aside className="sidebar">
-      <header className="sidebar-top"><a className="brand-lockup" href="/chat"><span className="brand-mark">a</span><span>alpha<span className="brand-light">Chat</span></span></a><span className={`connection-dot ${socketReady ? "is-connected" : ""}`} title={socketReady ? "Connected" : "Connecting"} /></header>
+      <header className="sidebar-top"><a className="brand-lockup" href="/chat"><img className="brand-mark brand-logo-image" src="/alphachat-logo.jpg" alt="" /><span>alpha<span className="brand-light">Chat</span></span></a><span className={`connection-dot ${socketReady ? "is-connected" : ""}`} title={socketReady ? "Connected" : "Connecting"} /></header>
       <div className="sidebar-heading"><div><span className="eyebrow">YOUR SPACE</span><h1>Messages <span className="count-pill">{conversations.length}</span></h1></div><button className="icon-button new-chat-button" aria-label="Start a conversation" title="Start a conversation" onClick={() => document.querySelector(".search-input")?.focus()}><Icon name="plus" /></button></div>
       <div className="search-wrap"><Icon name="search" size={17} /><input className="search-input" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Find someone..." aria-label="Search people" />{search && <button className="clear-search" onClick={() => setSearch("")} aria-label="Clear search">×</button>}</div>
       <div className="conversation-scroll">
@@ -221,23 +254,24 @@ export default function Chat() {
           {!loading && conversations.length === 0 && <div className="empty-list"><div className="empty-icon"><Icon name="message" size={22} /></div><b>Your conversations live here</b><span>Search for someone to say hello.</span></div>}
         </>}
       </div>
-      <footer className="profile-footer"><Avatar user={user} size="small" /><span><b>{user?.name}</b><small>@{user?.username}</small></span><button className="icon-button logout-button" aria-label="Sign out" title="Sign out" onClick={logout}><Icon name="logout" size={17} /></button></footer>
+      <footer className="profile-footer"><button className="profile-open-button" onClick={() => setProfileTarget(user)} aria-label="View or edit your profile"><Avatar user={user} size="small" /></button><button className="profile-footer-copy" onClick={() => setProfileTarget(user)}><b>{user?.name}</b><small>@{user?.username}</small></button><button className="icon-button logout-button" aria-label="Sign out" title="Sign out" onClick={logout}><Icon name="logout" size={17} /></button></footer>
     </aside>
 
     <section className="chat-pane">
       {!selected ? <div className="welcome-state"><div className="welcome-orbit"><span className="welcome-glyph"><Icon name="message" size={25} /></span><span className="orbit-dot dot-a" /><span className="orbit-dot dot-b" /><span className="orbit-dot dot-c" /></div><span className="eyebrow">A LITTLE SPACE, JUST FOR YOU</span><h2>Good conversations<br />start with <em>hello.</em></h2><p>Choose a chat or find someone new. The rest can wait.</p><button className="welcome-button" onClick={() => document.querySelector(".search-input")?.focus()}><Icon name="plus" size={16} /> Start a conversation</button><span className="welcome-footnote"><span className="eyebrow-dot" /> PRIVATE BY DESIGN</span></div> : <>
-        <header className="chat-header"><button className="back-button icon-button" onClick={() => setSelected(null)} aria-label="Back to conversations"><Icon name="back" /></button><Avatar user={activePeer} size="small" /><div className="header-person"><b>{activePeer?.name}</b><span>{activePeer?.isOnline ? <><i className="status-dot" /> Active now</> : activePeer?.lastSeen ? `Last seen ${timeLabel(activePeer.lastSeen)}` : `@${activePeer?.username}`}</span></div><span className={`header-secure ${socketReady && socket?.connected ? "" : "is-offline"}`}><span />{socketReady && socket?.connected ? "Live connection" : "Reconnecting"}</span></header>
+        <header className="chat-header"><button className="back-button icon-button" onClick={() => setSelected(null)} aria-label="Back to conversations"><Icon name="back" /></button><button className="profile-open-button" onClick={() => setProfileTarget(activePeer)} aria-label={`View ${activePeer?.name || "user"} profile`}><Avatar user={activePeer} size="small" /></button><button className="header-person" onClick={() => setProfileTarget(activePeer)}><b>{activePeer?.name}</b><span>{activePeer?.isOnline ? <><i className="status-dot" /> Active now</> : activePeer?.lastSeen ? `Last seen ${timeLabel(activePeer.lastSeen)}` : `@${activePeer?.username}`}</span></button><span className={`header-secure ${socketReady && socket?.connected ? "" : "is-offline"}`}><img src="/alphachat-logo.jpg" alt="alphaChat" /><span />{socketReady && socket?.connected ? "Live connection" : "Reconnecting"}</span></header>
         <div className="message-scroll" ref={listRef} onScroll={onScroll}>
           <div className="message-inner">
             {hasMore && <button className="load-older" onClick={loadOlder} disabled={loadingMessages}>{loadingMessages ? "Loading…" : "Load earlier messages"}</button>}
             {!loadingMessages && messages.length === 0 && <div className="conversation-intro"><div className="intro-avatar"><Avatar user={activePeer} size="large" /></div><span className="eyebrow">JUST THE TWO OF YOU</span><h2>{activePeer?.name}</h2><p>Send the first message and get things going.</p><span className="intro-date">TODAY</span></div>}
-            <AnimatePresence initial={false}>{messages.map((message) => <MessageRow key={message._id || message.clientId} message={message} own={idOf(message.sender) === idOf(user)} peer={activePeer} />)}</AnimatePresence>
+            <AnimatePresence initial={false}>{messages.map((message) => <MessageRow key={message._id || message.clientId} message={message} own={idOf(message.sender) === idOf(user)} peer={activePeer} onEdit={beginEdit} onDelete={deleteMessage} />)}</AnimatePresence>
             <AnimatePresence>{typing && <motion.div className="typing-row" initial={{ opacity: 0, y: 3 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}><Avatar user={activePeer} size="tiny" /><span className="typing-bubble"><i /><i /><i /></span><small>{activePeer?.name} is typing</small></motion.div>}</AnimatePresence>
           </div>
         </div>
         {newCount > 0 && <button className="new-message-pill" onClick={() => revealLatest(listRef.current)}>{newCount} new {newCount === 1 ? "message" : "messages"} ↓</button>}
-        <div className="composer-area">{error && <div className="chat-error" role="alert">{error}<button onClick={() => setError("")}>Dismiss</button></div>}<form className="composer" onSubmit={sendMessage}><textarea ref={draftRef} value={draft} onChange={onDraftChange} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendMessage(event); } }} rows={1} maxLength={4000} placeholder="Write a message..." aria-label="Message" /><motion.button className="send-button" type="submit" aria-label="Send message" disabled={!draft.trim() || !socketReady || !socket?.connected} whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.94 }}><Icon name="send" size={17} /></motion.button></form><div className="composer-hint"><span><kbd>↵</kbd> to send <span className="hint-divider">·</span> <kbd>shift</kbd> + <kbd>↵</kbd> for a new line</span><span>{draft.length > 0 ? `${draft.length}/4000` : "A little kindness goes a long way."}</span></div></div>
+        <div className="composer-area">{editing && <div className="editing-indicator">Editing message <button type="button" onClick={cancelEdit}>Cancel</button></div>}{error && <div className="chat-error" role="alert">{error}<button onClick={() => setError("")}>Dismiss</button></div>}<form className="composer" onSubmit={sendMessage}><textarea ref={draftRef} value={draft} onChange={onDraftChange} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendMessage(event); } }} rows={1} maxLength={4000} placeholder={editing ? "Edit your message..." : "Write a message..."} aria-label={editing ? "Edit message" : "Message"} /><motion.button className="send-button" type="submit" aria-label={editing ? "Save message" : "Send message"} disabled={!draft.trim() || !socketReady || !socket?.connected} whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.94 }}>{editing ? <Icon name="check" size={17} /> : <Icon name="send" size={17} />}</motion.button></form><div className="composer-hint"><span><kbd>↵</kbd> {editing ? "to save" : "to send"} <span className="hint-divider">·</span> <kbd>shift</kbd> + <kbd>↵</kbd> for a new line</span><span>{draft.length > 0 ? `${draft.length}/4000` : "A little kindness goes a long way."}</span></div></div>
       </>}
     </section>
+    {profileTarget && <ProfilePanel target={profileTarget} currentUser={user} updateUser={updateUser} onClose={() => setProfileTarget(null)} />}
   </main>;
 }

@@ -9,7 +9,7 @@ import { useAuth } from "./hooks/useAuth";
 function RouteView() {
   const { user, ready } = useAuth();
   const location = useLocation();
-  if (!ready) return <div className="boot-screen"><span className="brand-mark">a</span><span className="boot-line" /></div>;
+  if (!ready) return <div className="boot-screen"><img className="brand-mark brand-logo-image" src="/alphachat-logo.jpg" alt="alphaChat" /><span className="boot-line" /></div>;
   return <AnimatePresence mode="wait" initial={false}>
     <motion.div key={location.pathname} className="route-view" initial={{ opacity: 0, y: 7 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}>
       <Routes location={location}>
