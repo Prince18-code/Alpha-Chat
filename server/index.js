@@ -28,9 +28,15 @@ const server = http.createServer(app);
 const allowedOrigins = [...new Set([
   "http://localhost:5173",
   "http://192.168.31.81:5173",
+  "https://alpha-chat-9kxx.vercel.app",
   ...(process.env.CLIENT_URL || "").split(",").map((v) => v.trim()).filter(Boolean),
 ])];
-app.use(cors({ origin: allowedOrigins, credentials: true }));
+app.use(
+  cors({
+    origin: allowedOrigins,
+    credentials: true,
+  })
+);
 app.use(express.json({ limit: "16kb" }));
 app.use("/api/auth", authRoutes);
 app.use("/", mediaRoutes);
