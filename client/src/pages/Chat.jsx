@@ -115,7 +115,12 @@ export default function Chat() {
     if (!socket) return undefined;
     const onConnect = () => { setSocketReady(true); setError(""); };
     const onDisconnect = () => setSocketReady(false);
-    const onConnectError = () => { setSocketReady(false); setError("Chat connection lost. Reconnecting…"); };
+    const onConnectError = (connectionError) => {
+      setSocketReady(false);
+      const message = connectionError?.message || "Chat connection lost. Reconnecting…";
+      setError(message);
+      if (/authentication required|invalid session|session expired/i.test(message)) socket.disconnect();
+    };
     const onMessage = (message) => {
       const active = selectedRef.current;
       if (!conversationsRef.current.some((item) => idOf(item) === idOf(message.conversation))) fetchConversations();
@@ -156,6 +161,7 @@ export default function Chat() {
     socket.on("user_online", onUserOnline); socket.on("user_offline", onUserOffline);
     socket.on("message_updated", onMessageChange); socket.on("message_deleted", onMessageChange); socket.on("user_profile_updated", onProfileUpdate);
     socket.on("typing_start", onTypingStart); socket.on("typing_stop", onTypingStop);
+    if (!socket.connected) socket.connect();
     queueMicrotask(socket.connected ? onConnect : onDisconnect);
     return () => { socket.off("connect", onConnect); socket.off("disconnect", onDisconnect); socket.off("connect_error", onConnectError); socket.off("receive_message", onMessage); socket.off("user_online", onUserOnline); socket.off("user_offline", onUserOffline); socket.off("message_updated", onMessageChange); socket.off("message_deleted", onMessageChange); socket.off("user_profile_updated", onProfileUpdate); socket.off("typing_start", onTypingStart); socket.off("typing_stop", onTypingStop); };
   }, [socket, user, fetchConversations, updateUser]);

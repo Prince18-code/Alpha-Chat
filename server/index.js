@@ -29,6 +29,7 @@ const allowedOrigins = [...new Set([
   "http://localhost:5173",
   "http://192.168.31.81:5173",
   "https://alpha-chat-9kxx.vercel.app",
+  "https://alpha-chat-9kxx-4dfof6hv8-prince-f1e5.vercel.app",
   ...(process.env.CLIENT_URL || "").split(",").map((v) => v.trim()).filter(Boolean),
 ])];
 app.use(
@@ -50,20 +51,35 @@ app.use((error, _req, res, _next) => {
   res.status(500).json({ message: "Something went wrong. Please try again." });
 });
 
-const io = new Server(server, { cors: { origin: allowedOrigins, credentials: true }, transports: ["websocket", "polling"] });
+const io = new Server(server, {
+  cors: { origin: allowedOrigins, credentials: true, methods: ["GET", "POST"] },
+  transports: ["websocket", "polling"],
+});
 app.set("io", io);
 const activeSockets = new Map();
 
 io.use(async (socket, next) => {
+  console.info("[socket] connection attempt", { socketId: socket.id, origin: socket.handshake.headers.origin });
   try {
     const token = socket.handshake.auth?.token;
-    if (!token) return next(new Error("Authentication required"));
+    if (!token) {
+      console.warn("[socket] authentication failed: token missing", { socketId: socket.id });
+      return next(new Error("Authentication required: token missing"));
+    }
     const payload = jwt.verify(token, process.env.JWT_SECRET);
     const user = await User.findById(payload.sub).select("+tokenVersion");
-    if (!user || (payload.version || 0) !== user.tokenVersion) return next(new Error("Invalid session"));
+    if (!user || (payload.version || 0) !== user.tokenVersion) {
+      console.warn("[socket] authentication failed: user or session not found", { socketId: socket.id });
+      return next(new Error("Invalid session"));
+    }
     socket.userId = user.id;
+    console.info("[socket] authenticated", { socketId: socket.id, userId: user.id });
     next();
-  } catch { next(new Error("Invalid session")); }
+  } catch (error) {
+    const message = error.name === "TokenExpiredError" ? "Session expired. Please log in again." : "Invalid session";
+    console.warn("[socket] authentication failed", { socketId: socket.id, reason: message });
+    next(new Error(message));
+  }
 });
 
 io.on("connection", async (socket) => {
@@ -72,6 +88,7 @@ io.on("connection", async (socket) => {
   const count = activeSockets.get(userId) || 0;
   activeSockets.set(userId, count + 1);
   socket.join(userRoom);
+  console.info("[socket] user joined room", { socketId: socket.id, userId, room: userRoom });
   if (!count) {
     await User.findByIdAndUpdate(userId, { isOnline: true });
     socket.broadcast.emit("user_online", { userId });
@@ -157,6 +174,7 @@ io.on("connection", async (socket) => {
   }
 
   socket.on("disconnect", async () => {
+    console.info("[socket] disconnected", { socketId: socket.id, userId });
     const remaining = (activeSockets.get(userId) || 1) - 1;
     if (remaining > 0) return activeSockets.set(userId, remaining);
     activeSockets.delete(userId);

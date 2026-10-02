@@ -3,20 +3,11 @@ const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const requireAuth = require("../middleware/auth");
+const { ensureUsername } = require("../utils/ensureUsername");
 const router = express.Router();
 
 const publicUser = (user) => ({ id: user._id, name: user.name, username: user.username, email: user.email, profilePicture: user.profilePicture, isOnline: user.isOnline, lastSeen: user.lastSeen });
 const issueToken = (user) => jwt.sign({ sub: user._id.toString(), version: user.tokenVersion || 0 }, process.env.JWT_SECRET, { expiresIn: "14d" });
-async function assignUsername(user) {
-  if (user.username) return;
-  const normalized = user.name.toLowerCase().trim().replace(/[^a-z0-9_]/g, "").slice(0, 20);
-  const base = normalized.length >= 3 ? normalized : `user${Math.floor(1000 + Math.random() * 9000)}`;
-  let candidate = base;
-  while (await User.exists({ username: candidate })) candidate = `${base.slice(0, 18)}${Math.floor(100 + Math.random() * 900)}`;
-  user.username = candidate;
-  await user.save();
-}
-
 router.post("/register", async (req, res, next) => {
   try {
     const { name, email, password, username } = req.body || {};
@@ -43,7 +34,7 @@ router.post("/login", async (req, res, next) => {
     if (typeof email !== "string" || typeof password !== "string") return res.status(400).json({ message: "Email and password are required." });
     const user = await User.findOne({ email: email.trim().toLowerCase() }).select("+password +tokenVersion");
     if (!user || !(await bcrypt.compare(password, user.password))) return res.status(401).json({ message: "Email or password is incorrect." });
-    await assignUsername(user);
+    await ensureUsername(user);
     res.json({ token: issueToken(user), user: publicUser(user) });
   } catch (error) { next(error); }
 });
