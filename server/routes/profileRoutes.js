@@ -92,8 +92,7 @@ router.post("/users/me/profile-picture", parseImage, async (req, res, next) => {
     if (!detectedType || detectedType !== req.file.mimetype) return res.status(400).json({ message: "The selected file is not a supported image." });
     const fileBucket = bucket();
     const stream = fileBucket.openUploadStream(`profile-${req.user._id}`, {
-      contentType: detectedType,
-      metadata: { ownerId: req.user._id.toString() },
+      metadata: { ownerId: req.user._id.toString(), contentType: detectedType },
     });
     await pipeline(Readable.from(req.file.buffer), stream);
     newId = stream.id;

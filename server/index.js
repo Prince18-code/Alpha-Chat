@@ -101,14 +101,14 @@ io.on("connection", async (socket) => {
       if (!mongoose.isValidObjectId(data.conversationId)) return acknowledge({ error: "Conversation not found." });
       const conversation = await Conversation.findOne({ _id: data.conversationId, participants: userId });
       if (!conversation) return acknowledge({ error: "Conversation not found." });
-      const receiver = conversation.participants.find((id) => id.toString() !== userId);
+      const receiver = conversation.type === "group" ? null : conversation.participants.find((id) => id.toString() !== userId);
       const message = await Message.create({ conversation: conversation._id, sender: userId, receiver, content });
       conversation.lastMessage = message._id;
       conversation.lastMessageAt = message.createdAt;
+      conversation.hiddenFor = [];
       await conversation.save();
       const payload = { ...message.toObject(), clientId: typeof data.clientId === "string" ? data.clientId : undefined };
-      io.to(userRoom).emit("receive_message", payload);
-      io.to(`user:${receiver}`).emit("receive_message", payload);
+      io.to(conversation.participants.map((id) => `user:${id}`)).emit("receive_message", payload);
       acknowledge({ message: payload });
     } catch (error) {
       console.error("send_message failed", error);
@@ -124,14 +124,13 @@ io.on("connection", async (socket) => {
       const message = await Message.findById(data.messageId);
       if (!message || message.sender.toString() !== userId) return acknowledge({ error: "You can only edit your own messages." });
       if (message.isDeleted) return acknowledge({ error: "This message was deleted." });
-      const conversation = await Conversation.findOne({ _id: message.conversation, participants: userId }).select("_id");
+      const conversation = await Conversation.findOne({ _id: message.conversation, participants: userId }).select("participants");
       if (!conversation) return acknowledge({ error: "Conversation not found." });
       message.content = content;
       message.editedAt = new Date();
       await message.save();
       const payload = message.toObject();
-      io.to(`user:${message.sender}`).emit("message_updated", payload);
-      io.to(`user:${message.receiver}`).emit("message_updated", payload);
+      io.to(conversation.participants.map((id) => `user:${id}`)).emit("message_updated", payload);
       acknowledge({ message: payload });
     } catch (error) {
       console.error("edit_message failed", error);
@@ -145,15 +144,14 @@ io.on("connection", async (socket) => {
       const message = await Message.findById(data.messageId);
       if (!message || message.sender.toString() !== userId) return acknowledge({ error: "You can only delete your own messages." });
       if (message.isDeleted) return acknowledge({ error: "This message was already deleted." });
-      const conversation = await Conversation.findOne({ _id: message.conversation, participants: userId }).select("_id");
+      const conversation = await Conversation.findOne({ _id: message.conversation, participants: userId }).select("participants");
       if (!conversation) return acknowledge({ error: "Conversation not found." });
       message.content = "This message was deleted";
       message.isDeleted = true;
       message.deletedAt = new Date();
       await message.save();
       const payload = message.toObject();
-      io.to(`user:${message.sender}`).emit("message_deleted", payload);
-      io.to(`user:${message.receiver}`).emit("message_deleted", payload);
+      io.to(conversation.participants.map((id) => `user:${id}`)).emit("message_deleted", payload);
       acknowledge({ message: payload });
     } catch (error) {
       console.error("delete_message failed", error);
@@ -167,8 +165,7 @@ io.on("connection", async (socket) => {
         if (!mongoose.isValidObjectId(conversationId)) return;
         const conversation = await Conversation.findOne({ _id: conversationId, participants: userId }).select("participants");
         if (!conversation) return;
-        const receiver = conversation.participants.find((id) => id.toString() !== userId);
-        io.to(`user:${receiver}`).emit(event, { conversationId, userId });
+        io.to(conversation.participants.filter((id) => id.toString() !== userId).map((id) => `user:${id}`)).emit(event, { conversationId, userId });
       } catch (error) { console.error(`${event} failed`, error); }
     });
   }
